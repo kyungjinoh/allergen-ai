@@ -3,13 +3,13 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDBre5ZZdOw_VcxiijPZOEFA7kg1e1lKlA",
-  authDomain: "allergy-6f2a9.firebaseapp.com",
-  projectId: "allergy-6f2a9",
-  storageBucket: "allergy-6f2a9.appspot.com",
-  messagingSenderId: "1004642727087",
-  appId: "1:1004642727087:web:2b4587c7ed31deb8b6d05a",
-  measurementId: "G-89DER7TMCC"
+  apiKey: "AIzaSyBZtuVtVedy-Vnrsx3LU1r4lE2J1WumOi0",
+  authDomain: "allergen-ai-f3990.firebaseapp.com",
+  projectId: "allergen-ai-f3990",
+  storageBucket: "allergen-ai-f3990.firebasestorage.app",
+  messagingSenderId: "343840041645",
+  appId: "1:343840041645:web:0955d6b8777af2b7aa3424",
+  measurementId: "G-XM7RRBZP2F"
 };
 
 // Initialize Firebase
