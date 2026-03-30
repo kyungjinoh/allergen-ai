@@ -1,9 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import DashboardSidebar from './DashboardSidebar';
-import { ClipboardCheck, Brain, AlertTriangle, ChevronDown, ChevronUp, CheckCircle, ChevronRight, Stethoscope, Utensils } from 'lucide-react';
+import { ClipboardCheck, Brain, ChevronDown, CheckCircle, ChevronRight, Stethoscope, Utensils } from 'lucide-react';
 import './Dashboard.css';
 import { db } from './firebase';
-import { addDoc, collection, serverTimestamp, getDoc, doc } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { GeminiService } from './services/geminiService';
@@ -109,7 +109,7 @@ const LogReaction: React.FC = () => {
   const [symptomDesc, setSymptomDesc] = useState('');
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [showAllSymptoms, setShowAllSymptoms] = useState(false);
+  const [showAllSymptoms] = useState(false);
   const [showScaleInterpretation, setShowScaleInterpretation] = useState(false);
   const [showPatientInstructions, setShowPatientInstructions] = useState(false);
   const [showEnvironmentalInstructions, setShowEnvironmentalInstructions] = useState(false);
@@ -138,7 +138,7 @@ const LogReaction: React.FC = () => {
       hasProcessedScanText: false,
     },
   ]);
-  const [activeProduct, setActiveProduct] = useState(0);
+  // activeProduct removed (unused)
   const { user } = useAuth();
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -243,7 +243,7 @@ const LogReaction: React.FC = () => {
     }
   };
 
-  const displayedSymptoms = showAllSymptoms ? symptomOptions : symptomOptions.slice(0, 12);
+  // displayedSymptoms removed (unused)
 
   const fetchBarcodeIngredients = async (idx: number) => {
     setProducts(p => p.map((pr, i) => i === idx ? { ...pr, isBarcodeLoading: true, barcodeError: '' } : pr));
@@ -413,7 +413,7 @@ const LogReaction: React.FC = () => {
   // Test Firebase connection on component mount
   useEffect(() => {
     testFirebaseConnection();
-  }, [user]);
+  }, [user, testFirebaseConnection]);
 
   // Submit safe food log
   const submitSafeFoodLog = async () => {

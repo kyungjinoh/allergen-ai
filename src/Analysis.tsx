@@ -26,16 +26,6 @@ interface AllergyLog {
   docId?: string;
 }
 
-interface AllergenRanking {
-  allergen: string;
-  risk_score: number;
-  frequency: number;
-  severity_correlation: number;
-  risk_category: 'Low' | 'Medium' | 'High' | 'Critical';
-  explanation: string;
-  recommendation: string;
-}
-
 interface LocalAllergen {
     ingredient: string;
   frequency: number;

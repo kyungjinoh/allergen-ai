@@ -1,6 +1,4 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from './AuthContext';
 import './PricingPlan.css';
 
 const plans = [
@@ -17,8 +15,6 @@ const plans = [
 ];
 
 const PricingPlan: React.FC = () => {
-  const { user } = useAuth();
-  const navigate = useNavigate();
   const [showContact, setShowContact] = useState(false);
 
   const handleEnterpriseClick = () => {

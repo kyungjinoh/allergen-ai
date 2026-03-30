@@ -1,7 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
-import { FlaskConical } from 'lucide-react';
 import './HeroSection.css';
 
 const HeroSection: React.FC = () => {

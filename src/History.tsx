@@ -3,11 +3,10 @@ import DashboardSidebar from './DashboardSidebar';
 import './Dashboard.css';
 import { History as HistoryIcon, ClipboardList, BarChart3, CheckCircle, Trash2 } from 'lucide-react';
 import { db } from './firebase';
-import { collection, query, where, getDocs, deleteDoc, doc, setDoc, getDoc, addDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, deleteDoc, doc, setDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 import { useAccessControl } from './hooks/useAccessControl';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 
 interface LogProduct {
   name: string;
@@ -61,47 +60,7 @@ const History: React.FC = () => {
     return logsData.map(log => `${log.time}-${log.docId}`).join('|');
   };
 
-  // Migrate existing logs to current user
-  const migrateExistingLogs = async () => {
-    if (!user) return;
-    
-    try {
-      console.log('Starting log migration for user:', user.uid);
-      
-      // Get all logs
-      const allLogsQuery = query(collection(db, 'logs'));
-      const allLogsSnapshot = await getDocs(allLogsQuery);
-      
-      console.log('Found', allLogsSnapshot.size, 'total logs to check for migration');
-      
-      let migratedCount = 0;
-      
-      for (const doc of allLogsSnapshot.docs) {
-        const data = doc.data();
-        
-        // If this log doesn't belong to current user, create a copy for current user
-        if (data.uid !== user.uid) {
-          console.log('Migrating log:', doc.id, 'from UID:', data.uid, 'to UID:', user.uid);
-          
-          // Create new log with current user's UID
-          const newLogData = {
-            ...data,
-            uid: user.uid,
-            migratedFrom: doc.id,
-            migratedAt: new Date().toISOString()
-          };
-          
-          await addDoc(collection(db, 'logs'), newLogData);
-          migratedCount++;
-        }
-      }
-      
-      console.log('Migration complete. Migrated', migratedCount, 'logs to user:', user.uid);
-      
-    } catch (error) {
-      console.error('Error during log migration:', error);
-    }
-  };
+  // migrateExistingLogs removed (was unused)
 
   // Save history data to Firebase
   const saveHistoryToFirebase = async (logsData: AllergyLog[], logsHash: string) => {
@@ -221,7 +180,7 @@ const History: React.FC = () => {
     console.log('User found in History:', user.uid, user.email);
     fetchLogs();
     fetchSafeFoodLogs();
-  }, [user]);
+  }, [user, fetchLogs, fetchSafeFoodLogs]);
 
   useEffect(() => {
     setDisplayedLogs(logs.slice(0, logsToShow));

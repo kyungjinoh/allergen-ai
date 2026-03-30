@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
-import { User, Mail, Edit, Save, X, ArrowLeft, Hash } from 'lucide-react';
+import { User, Mail, Edit, ArrowLeft, Hash } from 'lucide-react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { updateProfile } from 'firebase/auth';
 import { db } from './firebase';

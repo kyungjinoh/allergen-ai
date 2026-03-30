@@ -1,12 +1,11 @@
 import { useAuth } from '../AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
 export const useAccessControl = (checkAccess: boolean = true) => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [loading, setLoading] = useState(false);
   const uniqueId = null as string | null;
 
   // This app previously used a uniqueId allowlist to gate access to dashboard routes.
@@ -29,6 +28,6 @@ export const useAccessControl = (checkAccess: boolean = true) => {
     ALLOWED_UNIQUE_IDS: [] as string[],
     isRestrictedRoute,
     uniqueId,
-    loading
+    loading: false
   };
 }; 
