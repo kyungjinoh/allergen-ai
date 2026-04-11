@@ -33,7 +33,10 @@ const GEMINI_API_URL =
 
 // Rate limiting (simple client-side throttling)
 let lastCallTime = 0;
-const MIN_INTERVAL = 2000; // 2 seconds between calls
+const MIN_INTERVAL = 2500; // ms between calls (reduces burst 429s)
+
+const GEMINI_429_RETRIES = 4;
+const GEMINI_429_BASE_MS = 5000;
 
 function assertApiKey() {
   if (!GEMINI_API_KEY) {
@@ -50,47 +53,75 @@ function extractTextFromGeminiResponse(data: any): string {
 }
 
 export class GeminiService {
+  /** When Gemini is unavailable or rate-limited, turn OpenFoodFacts-style text into a comma list. */
+  static ingredientsTextToCommaList(ingredientsText: string): string {
+    const parts = ingredientsText
+      .split(/[,;]|(?:\s+and\s+)/i)
+      .map(s => s.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim())
+      .filter(s => s.length > 0 && s.length < 200);
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const p of parts) {
+      const key = p.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(p);
+      }
+    }
+    return unique.join(', ');
+  }
+
   private static async callGeminiAPI(
     prompt: string,
     systemMessage?: string,
     temperature: number = 0.1,
     maxOutputTokens: number = 4000
   ): Promise<string> {
-    // Rate limiting
-    const now = Date.now();
-    const timeSinceLastCall = now - lastCallTime;
-    if (timeSinceLastCall < MIN_INTERVAL) {
-      const delay = MIN_INTERVAL - timeSinceLastCall;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-    lastCallTime = Date.now();
-
     assertApiKey();
 
     const fullPrompt = systemMessage ? `${systemMessage}\n\n${prompt}` : prompt;
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(GEMINI_API_KEY!)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-        generationConfig: {
-          temperature,
-          maxOutputTokens,
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      if (response.status === 429) {
-        throw new Error('API rate limit exceeded. Please try again later.');
+    for (let attempt = 0; attempt <= GEMINI_429_RETRIES; attempt++) {
+      // Rate limiting before each attempt
+      const now = Date.now();
+      const timeSinceLastCall = now - lastCallTime;
+      if (timeSinceLastCall < MIN_INTERVAL) {
+        await new Promise(resolve => setTimeout(resolve, MIN_INTERVAL - timeSinceLastCall));
       }
-      throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+      lastCallTime = Date.now();
+
+      const response = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(GEMINI_API_KEY!)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+          generationConfig: {
+            temperature,
+            maxOutputTokens,
+          },
+        }),
+      });
+
+      if (response.status === 429 && attempt < GEMINI_429_RETRIES) {
+        const waitMs = GEMINI_429_BASE_MS * Math.pow(2, attempt);
+        console.warn(`Gemini 429; retrying in ${waitMs}ms (attempt ${attempt + 1}/${GEMINI_429_RETRIES})`);
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (response.status === 429) {
+          throw new Error('API rate limit exceeded. Please try again later.');
+        }
+        throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      return extractTextFromGeminiResponse(data);
     }
 
-    const data = await response.json();
-    return extractTextFromGeminiResponse(data);
+    throw new Error('API rate limit exceeded. Please try again later.');
   }
 
   static async analyzeIngredient(ingredient: string, allergen: any): Promise<string> {
@@ -200,12 +231,23 @@ Return ONLY the names of exactly 5 specific test kits with brand names. Do not i
   }
 
   static async extractIngredients(ingredientsText: string): Promise<string> {
-    return this.callGeminiAPI(
-      ingredientsText,
-      `You are an expert at extracting food ingredients from product labels and barcode databases. Given the following text, extract only the most structured, quantified, or English ingredient list. If any ingredient is in a different language, translate it to English. Output ONLY the ingredient list itself, with NO introductory, explanatory, or summary sentences. The output must be a single, comma-separated list, with NO duplicate or overlapping items. If there are no ingredients, return nothing.`,
-      0.2,
-      250
-    );
+    const trimmed = ingredientsText?.trim() ?? '';
+    if (!trimmed) return '';
+
+    try {
+      const ai = await this.callGeminiAPI(
+        trimmed,
+        `You are an expert at extracting food ingredients from product labels and barcode databases. Given the following text, extract only the most structured, quantified, or English ingredient list. If any ingredient is in a different language, translate it to English. Output ONLY the ingredient list itself, with NO introductory, explanatory, or summary sentences. The output must be a single, comma-separated list, with NO duplicate or overlapping items. If there are no ingredients, return nothing.`,
+        0.2,
+        250
+      );
+      const cleaned = ai.trim();
+      if (cleaned) return cleaned;
+    } catch (e) {
+      console.warn('Gemini extractIngredients failed; using local parse.', e);
+    }
+
+    return this.ingredientsTextToCommaList(trimmed);
   }
 
   static async analyzeLogIngredients(
