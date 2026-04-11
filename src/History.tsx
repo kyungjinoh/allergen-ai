@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import DashboardSidebar from './DashboardSidebar';
 import './Dashboard.css';
 import { History as HistoryIcon, ClipboardList, BarChart3, CheckCircle, Trash2 } from 'lucide-react';
@@ -32,6 +32,10 @@ interface SafeFoodLog {
   docId?: string;
 }
 
+function createLogsHash(logsData: AllergyLog[]): string {
+  return logsData.map(log => `${log.time}-${log.docId}`).join('|');
+}
+
 const History: React.FC = () => {
   const { redirectIfNoAccess } = useAccessControl();
   
@@ -54,133 +58,120 @@ const History: React.FC = () => {
   const [deletedSafeFoods, setDeletedSafeFoods] = useState<Set<string>>(new Set());
   const { user } = useAuth();
   const [pdfLoading, setPdfLoading] = useState(false);
+  const uid = user?.uid;
 
-  // Create a hash of logs data for comparison
-  const createLogsHash = (logsData: AllergyLog[]): string => {
-    return logsData.map(log => `${log.time}-${log.docId}`).join('|');
-  };
+  const saveHistoryToFirebase = useCallback(
+    async (logsData: AllergyLog[], logsHash: string) => {
+      if (!uid) return;
 
-  // migrateExistingLogs removed (was unused)
+      try {
+        const historyRef = doc(db, 'history', uid);
+        await setDoc(
+          historyRef,
+          {
+            logs: logsData,
+            logsHash: logsHash,
+            lastUpdated: new Date().toISOString(),
+            userId: uid,
+          },
+          { merge: true }
+        );
+      } catch (error) {
+        console.error('Error saving history to Firebase:', error);
+      }
+    },
+    [uid]
+  );
 
-  // Save history data to Firebase
-  const saveHistoryToFirebase = async (logsData: AllergyLog[], logsHash: string) => {
-    if (!user) return;
-    
+  const loadHistoryFromFirebase = useCallback(async (): Promise<{ logs: AllergyLog[]; logsHash: string } | null> => {
+    if (!uid) return null;
+
     try {
-      const historyRef = doc(db, 'history', user.uid);
-      await setDoc(historyRef, {
-        logs: logsData,
-        logsHash: logsHash,
-        lastUpdated: new Date().toISOString(),
-        userId: user.uid
-      });
-      console.log('History saved to Firebase');
-    } catch (error) {
-      console.error('Error saving history to Firebase:', error);
-    }
-  };
-
-  // Load history data from Firebase
-  const loadHistoryFromFirebase = async (): Promise<{ logs: AllergyLog[]; logsHash: string } | null> => {
-    if (!user) return null;
-    
-    try {
-      const historyRef = doc(db, 'history', user.uid);
+      const historyRef = doc(db, 'history', uid);
       const historyDoc = await getDoc(historyRef);
-      
+
       if (historyDoc.exists()) {
         const data = historyDoc.data();
-        console.log('History loaded from Firebase');
         return {
           logs: data.logs,
-          logsHash: data.logsHash
+          logsHash: data.logsHash,
         };
       }
     } catch (error) {
       console.error('Error loading history from Firebase:', error);
     }
-    
+
     return null;
-  };
+  }, [uid]);
 
-    const fetchLogs = async () => {
-      setLoading(true);
-      try {
-        // Always fetch from live logs collection first
-      const q = query(collection(db, 'logs'), where('uid', '==', user?.uid));
-        const querySnapshot = await getDocs(q);
-        console.log('History: Found', querySnapshot.size, 'logs in Firebase');
-        
-        const logsData: AllergyLog[] = [];
-        querySnapshot.forEach(doc => {
-          const data = doc.data();
-          console.log('History: Processing log:', doc.id, 'UID:', data.uid, 'Time:', data.time, 'Products:', data.products?.length || 0);
-          logsData.push({
-            time: data.time,
-            severity: data.severity,
-            symptoms: data.symptoms || [],
-            symptomDesc: data.symptomDesc || '',
-            aiAnalysis: data.aiAnalysis || '',
-            products: data.products || [],
-            environmentalCause: data.environmentalCause || '',
-            docId: doc.id,
-          });
-        });
-        
-        console.log('History: Final logs data:', logsData);
-        console.log('History: Logs data length:', logsData.length);
-        setLogs(logsData);
-        setDisplayedLogs(logsData.slice(0, logsToShow));
-        setHasMoreLogs(logsData.length > logsToShow);
-        // Update the history cache
-        const newLogsHash = createLogsHash(logsData);
-        await saveHistoryToFirebase(logsData, newLogsHash);
-        setLoading(false);
-      } catch (err) {
-        // If live fetch fails, fallback to cache
-        const savedHistory = await loadHistoryFromFirebase();
-        if (savedHistory) {
-          setLogs(savedHistory.logs);
-          setDisplayedLogs(savedHistory.logs.slice(0, logsToShow));
-          setHasMoreLogs(savedHistory.logs.length > logsToShow);
-        }
-        setLoading(false);
-      }
-    };
-
-  // Fetch safe food logs
-  const fetchSafeFoodLogs = async () => {
+  const fetchLogs = useCallback(async () => {
+    if (!uid) return;
+    setLoading(true);
     try {
-      const q = query(collection(db, 'safe_foods'), where('uid', '==', user?.uid));
+      const q = query(collection(db, 'logs'), where('uid', '==', uid));
       const querySnapshot = await getDocs(q);
-      console.log('History: Found', querySnapshot.size, 'safe food logs in Firebase');
-      
+
+      const logsData: AllergyLog[] = [];
+      querySnapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        logsData.push({
+          time: data.time,
+          severity: data.severity,
+          symptoms: data.symptoms || [],
+          symptomDesc: data.symptomDesc || '',
+          aiAnalysis: data.aiAnalysis || '',
+          products: data.products || [],
+          environmentalCause: data.environmentalCause || '',
+          docId: docSnap.id,
+        });
+      });
+
+      setLogs(logsData);
+      await saveHistoryToFirebase(logsData, createLogsHash(logsData));
+    } catch (err) {
+      const savedHistory = await loadHistoryFromFirebase();
+      if (savedHistory) {
+        setLogs(savedHistory.logs);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [uid, saveHistoryToFirebase, loadHistoryFromFirebase]);
+
+  const fetchSafeFoodLogs = useCallback(async () => {
+    if (!uid) return;
+    try {
+      const q = query(collection(db, 'safe_foods'), where('uid', '==', uid));
+      const querySnapshot = await getDocs(q);
+
       const safeFoodLogsData: SafeFoodLog[] = [];
-      querySnapshot.forEach(doc => {
-        const data = doc.data();
+      querySnapshot.forEach(docSnap => {
+        const data = docSnap.data();
         safeFoodLogsData.push({
           time: data.time,
           products: data.products || [],
-          docId: doc.id,
+          docId: docSnap.id,
         });
       });
-      // Sort by time descending (latest first)
       safeFoodLogsData.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
       setSafeFoodLogs(safeFoodLogsData);
     } catch (err) {
       console.error('Error fetching safe food logs:', err);
     }
-  };
+  }, [uid]);
 
   useEffect(() => {
-    if (!user) {
-      console.log('No user found in History component');
+    if (!uid) {
+      setLogs([]);
+      setSafeFoodLogs([]);
+      setDisplayedLogs([]);
+      setHasMoreLogs(false);
+      setLoading(false);
       return;
     }
-    console.log('User found in History:', user.uid, user.email);
-    fetchLogs();
-    fetchSafeFoodLogs();
-  }, [user, fetchLogs, fetchSafeFoodLogs]);
+    void fetchLogs();
+    void fetchSafeFoodLogs();
+  }, [uid, fetchLogs, fetchSafeFoodLogs]);
 
   useEffect(() => {
     setDisplayedLogs(logs.slice(0, logsToShow));
