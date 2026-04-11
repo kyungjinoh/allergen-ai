@@ -1,39 +1,63 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow users to read and write their own logs
-    match /logs/{document} {
-      allow read, write: if request.auth != null && request.auth.uid == resource.data.uid;
+
+    // Allergy logs: user-owned documents (uid field must match auth)
+    match /logs/{logId} {
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if request.auth != null
+        && resource.data.uid == request.auth.uid;
     }
-    
-    // Allow users to read and write their own allergen analysis
+
+    // Safe foods: same pattern
+    match /safe_foods/{docId} {
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if request.auth != null
+        && resource.data.uid == request.auth.uid;
+    }
+
+    // History cache (History.tsx saves under history/{userId})
+    match /history/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // User profile docs (Profile, SignUp flows)
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Dev-only connection test (LogReaction.tsx)
+    match /test/{docId} {
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid;
+      allow read, delete: if request.auth != null
+        && resource.data.uid == request.auth.uid;
+    }
+
     match /allergen_analysis/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-    
-    // Allow users to read and write their own AI analysis results
+
     match /ai_analysis_results/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-    
-    // Allow users to read and write their own risk levels
+
     match /risk_levels/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-    
-    // Allow users to read and write their own overall summary
+
     match /overall_summary/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-    
-    // Allow users to read and write their own test kit suggestions
+
     match /test_kit_suggestions/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-    
-    // Default rule - deny all other access
+
     match /{document=**} {
       allow read, write: if false;
     }
   }
-} 
+}
