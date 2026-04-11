@@ -31,12 +31,13 @@ const GEMINI_API_KEY = process.env.REACT_APP_GEMINI_API_KEY;
 const GEMINI_API_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
-// Rate limiting (simple client-side throttling)
+// Rate limiting + global queue: parallel callers (e.g. many useEffects) must not
+// hit fetch() at once — they all pass MIN_INTERVAL checks unless serialized.
 let lastCallTime = 0;
-const MIN_INTERVAL = 2500; // ms between calls (reduces burst 429s)
+const MIN_INTERVAL = 3200; // ms between Gemini HTTP requests
 
-const GEMINI_429_RETRIES = 4;
-const GEMINI_429_BASE_MS = 5000;
+const GEMINI_429_RETRIES = 5;
+const GEMINI_429_BASE_MS = 6000;
 
 function assertApiKey() {
   if (!GEMINI_API_KEY) {
@@ -53,6 +54,18 @@ function extractTextFromGeminiResponse(data: any): string {
 }
 
 export class GeminiService {
+  private static geminiChain: Promise<unknown> = Promise.resolve();
+
+  /** One Gemini HTTP sequence at a time (retries included). */
+  private static enqueueGeminiTask<T>(task: () => Promise<T>): Promise<T> {
+    const next = GeminiService.geminiChain.then(() => task());
+    GeminiService.geminiChain = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
+  }
+
   /** When Gemini is unavailable or rate-limited, turn OpenFoodFacts-style text into a comma list. */
   static ingredientsTextToCommaList(ingredientsText: string): string {
     const parts = ingredientsText
@@ -71,7 +84,7 @@ export class GeminiService {
     return unique.join(', ');
   }
 
-  private static async callGeminiAPI(
+  private static callGeminiAPI(
     prompt: string,
     systemMessage?: string,
     temperature: number = 0.1,
@@ -81,47 +94,48 @@ export class GeminiService {
 
     const fullPrompt = systemMessage ? `${systemMessage}\n\n${prompt}` : prompt;
 
-    for (let attempt = 0; attempt <= GEMINI_429_RETRIES; attempt++) {
-      // Rate limiting before each attempt
-      const now = Date.now();
-      const timeSinceLastCall = now - lastCallTime;
-      if (timeSinceLastCall < MIN_INTERVAL) {
-        await new Promise(resolve => setTimeout(resolve, MIN_INTERVAL - timeSinceLastCall));
-      }
-      lastCallTime = Date.now();
-
-      const response = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(GEMINI_API_KEY!)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-          generationConfig: {
-            temperature,
-            maxOutputTokens,
-          },
-        }),
-      });
-
-      if (response.status === 429 && attempt < GEMINI_429_RETRIES) {
-        const waitMs = GEMINI_429_BASE_MS * Math.pow(2, attempt);
-        console.warn(`Gemini 429; retrying in ${waitMs}ms (attempt ${attempt + 1}/${GEMINI_429_RETRIES})`);
-        await new Promise(resolve => setTimeout(resolve, waitMs));
-        continue;
-      }
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        if (response.status === 429) {
-          throw new Error('API rate limit exceeded. Please try again later.');
+    return GeminiService.enqueueGeminiTask(async () => {
+      for (let attempt = 0; attempt <= GEMINI_429_RETRIES; attempt++) {
+        const now = Date.now();
+        const timeSinceLastCall = now - lastCallTime;
+        if (timeSinceLastCall < MIN_INTERVAL) {
+          await new Promise(resolve => setTimeout(resolve, MIN_INTERVAL - timeSinceLastCall));
         }
-        throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+        lastCallTime = Date.now();
+
+        const response = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(GEMINI_API_KEY!)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+            generationConfig: {
+              temperature,
+              maxOutputTokens,
+            },
+          }),
+        });
+
+        if (response.status === 429 && attempt < GEMINI_429_RETRIES) {
+          const waitMs = GEMINI_429_BASE_MS * Math.pow(2, attempt);
+          console.warn(`Gemini 429; retrying in ${waitMs}ms (attempt ${attempt + 1}/${GEMINI_429_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, waitMs));
+          continue;
+        }
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          if (response.status === 429) {
+            throw new Error('API rate limit exceeded. Please try again later.');
+          }
+          throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        return extractTextFromGeminiResponse(data);
       }
 
-      const data = await response.json();
-      return extractTextFromGeminiResponse(data);
-    }
-
-    throw new Error('API rate limit exceeded. Please try again later.');
+      throw new Error('API rate limit exceeded. Please try again later.');
+    });
   }
 
   static async analyzeIngredient(ingredient: string, allergen: any): Promise<string> {
@@ -174,6 +188,48 @@ Respond with ONLY the numerical score (0-100), no other text.`;
     const riskLevel = parseInt(response.trim().replace(/[^\d]/g, ''), 10);
     if (!isNaN(riskLevel) && riskLevel >= 0 && riskLevel <= 100) return riskLevel;
     throw new Error('Invalid risk level response');
+  }
+
+  /** One API call for many ingredients (avoids N parallel requests from Analysis). */
+  static async analyzeRiskLevelsBatch(ingredients: string[]): Promise<number[]> {
+    const names = ingredients.map(s => String(s).trim()).filter(Boolean);
+    if (names.length === 0) return [];
+
+    const list = names.map((ing, i) => `${i + 1}. ${ing}`).join('\n');
+    const prompt = `For each food ingredient below, estimate inherent allergenic risk as an integer from 0-100 (0 = very low, 100 = major allergen / severe risk common). Use clinical/epidemiological priors, not this user's history.
+
+${list}
+
+Respond with ONLY a JSON array of exactly ${names.length} integers in the same order, e.g. [12, 45, 80]. No markdown fences, no explanation.`;
+
+    const response = await this.callGeminiAPI(
+      prompt,
+      'You reply with only a JSON array of integers.',
+      0.1,
+      800
+    );
+
+    const parseArray = (text: string): number[] => {
+      const t = text.trim();
+      const start = t.indexOf('[');
+      const end = t.lastIndexOf(']');
+      if (start === -1 || end <= start) return [];
+      try {
+        const raw = JSON.parse(t.slice(start, end + 1));
+        if (!Array.isArray(raw)) return [];
+        return raw.map((x: unknown) => {
+          const n = parseInt(String(x).replace(/[^\d-]/g, ''), 10);
+          return isNaN(n) ? NaN : Math.min(100, Math.max(0, n));
+        });
+      } catch {
+        return [];
+      }
+    };
+
+    let scores = parseArray(response);
+    while (scores.length < names.length) scores.push(50);
+    scores = scores.slice(0, names.length);
+    return scores.map(s => (typeof s === 'number' && !isNaN(s) ? s : 50));
   }
 
   static async generateOverallSummary(topAllergens: any[], logsLength: number): Promise<string> {

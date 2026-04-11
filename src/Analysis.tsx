@@ -675,27 +675,67 @@ const Analysis: React.FC = () => {
     setChatMessages([welcomeMessage]);
   }, [logs.length]);
 
-  // Automatically analyze risk levels for new ingredients only
+  // One batched Gemini call for missing risk scores (was up to 10 parallel calls → 429).
   useEffect(() => {
-    if (localAllergens.length > 0) {
-      localAllergens.slice(0, 10).forEach(allergen => {
-        if (!riskLevels[allergen.ingredient] && !riskLoadingStates[allergen.ingredient]) {
-          analyzeRiskLevel(allergen.ingredient, allergen);
-        }
-      });
-    }
-  }, [localAllergens, riskLevels, riskLoadingStates, analyzeRiskLevel]);
+    if (!user || !riskLevelsLoaded || localAllergens.length === 0) return;
 
-  // Automatically analyze risk levels for new ingredients only (after loading)
-  useEffect(() => {
-    if (localAllergens.length > 0 && riskLevelsLoaded) {
-      localAllergens.slice(0, 10).forEach(allergen => {
-        if (!riskLevels[allergen.ingredient] && !riskLoadingStates[allergen.ingredient]) {
-          analyzeRiskLevel(allergen.ingredient, allergen);
-        }
-      });
-    }
-  }, [localAllergens, riskLevels, riskLoadingStates, riskLevelsLoaded, analyzeRiskLevel]);
+    const pendingNames = localAllergens
+      .slice(0, 10)
+      .map(a => a.ingredient)
+      .filter(name => !(name in riskLevels));
+
+    if (pendingNames.length === 0) return;
+
+    setRiskLoadingStates(prev => {
+      const next = { ...prev };
+      for (const name of pendingNames) next[name] = true;
+      return next;
+    });
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const scores = await GeminiService.analyzeRiskLevelsBatch(pendingNames);
+        if (cancelled) return;
+        const nextLevels: Record<string, number> = {};
+        pendingNames.forEach((name, i) => {
+          const s = scores[i];
+          nextLevels[name] =
+            typeof s === 'number' && !isNaN(s)
+              ? Math.min(100, Math.max(0, Math.round(Number(s))))
+              : 50;
+        });
+        setRiskLevels(prev => {
+          const merged = { ...prev, ...nextLevels };
+          void saveRiskLevels(merged);
+          return merged;
+        });
+      } catch (e) {
+        if (cancelled) return;
+        console.error('Batched risk level analysis failed:', e);
+        const defaults: Record<string, number> = {};
+        pendingNames.forEach(name => {
+          defaults[name] = 50;
+        });
+        setRiskLevels(prev => {
+          const merged = { ...prev, ...defaults };
+          void saveRiskLevels(merged);
+          return merged;
+        });
+      } finally {
+        setRiskLoadingStates(prev => {
+          const next = { ...prev };
+          for (const name of pendingNames) next[name] = false;
+          return next;
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, riskLevelsLoaded, localAllergens, riskLevels, saveRiskLevels]);
 
   // Check if there are new logs that need analysis
   const checkForNewLogsAndAnalyze = useCallback(async () => {
