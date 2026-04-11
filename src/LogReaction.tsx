@@ -182,6 +182,43 @@ const LogReaction: React.FC = () => {
       .filter((item: string) => item.length > 0); // Remove empty items after cleaning
   };
 
+  /** Barcode: skip Gemini when OpenFoodFacts returns structured ingredients (avoids 429). */
+  const normalizeBarcodeIngredientList = async (
+    ingredientsFromArray: string[],
+    ingredientsTextFallback: string
+  ): Promise<string[]> => {
+    const dedupe = (items: string[]): string[] => {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const raw of items) {
+        const x = raw.trim();
+        if (!x) continue;
+        const k = x.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(x);
+      }
+      return out;
+    };
+
+    if (ingredientsFromArray.length > 0) {
+      return dedupe(ingredientsFromArray.map((t) => String(t).trim()).filter(Boolean));
+    }
+
+    const text = ingredientsTextFallback.trim();
+    if (!text) return [];
+
+    let csv = '';
+    try {
+      csv = await GeminiService.extractIngredients(text);
+    } catch {
+      csv = GeminiService.ingredientsTextToCommaList(text);
+    }
+    const fromAi = cleanAIResponse(csv);
+    if (fromAi.length > 0) return dedupe(fromAi);
+    return dedupe(cleanAIResponse(GeminiService.ingredientsTextToCommaList(text)));
+  };
+
   const handleSymptomChange = (option: string) => {
     setSymptoms(prev =>
       prev.includes(option)
@@ -277,10 +314,7 @@ const LogReaction: React.FC = () => {
         (typeof product.ingredients_text === 'string' && product.ingredients_text.trim()) ||
         '';
 
-      const ingredientsText =
-        ingredientsFromArray.length > 0 ? ingredientsFromArray.join(', ') : ingredientsTextFallback;
-
-      if (!ingredientsText) {
+      if (ingredientsFromArray.length === 0 && !ingredientsTextFallback.trim()) {
         setProducts(p => p.map((pr, i) => i === idx ? { ...pr, isBarcodeLoading: false, barcodeError: 'No ingredients found for this barcode.' } : pr));
         return;
       }
@@ -290,8 +324,7 @@ const LogReaction: React.FC = () => {
         ? product.allergens_tags.map((a: string) => a.replace(/^en:/, '').replace(/_/g, ' ').toLowerCase())
         : [];
 
-      const geminiResponse = await GeminiService.extractIngredients(ingredientsText);
-      const list = cleanAIResponse(geminiResponse);
+      const list = await normalizeBarcodeIngredientList(ingredientsFromArray, ingredientsTextFallback);
 
       // Add allergens (lowercased, no duplicates)
       const allItems = [
@@ -350,10 +383,7 @@ const LogReaction: React.FC = () => {
         (typeof product.ingredients_text === 'string' && product.ingredients_text.trim()) ||
         '';
 
-      const ingredientsText =
-        ingredientsFromArray.length > 0 ? ingredientsFromArray.join(', ') : ingredientsTextFallback;
-
-      if (!ingredientsText) {
+      if (ingredientsFromArray.length === 0 && !ingredientsTextFallback.trim()) {
         setSafeFoodProducts(p => p.map((pr, i) => i === idx ? { ...pr, isBarcodeLoading: false, barcodeError: 'No ingredients found for this barcode.' } : pr));
         return;
       }
@@ -362,8 +392,7 @@ const LogReaction: React.FC = () => {
         ? product.allergens_tags.map((a: string) => a.replace(/^en:/, '').replace(/_/g, ' ').toLowerCase())
         : [];
 
-      const geminiResponse = await GeminiService.extractIngredients(ingredientsText);
-      const list = cleanAIResponse(geminiResponse);
+      const list = await normalizeBarcodeIngredientList(ingredientsFromArray, ingredientsTextFallback);
 
       const allItems = [
         ...list,
@@ -391,7 +420,7 @@ const LogReaction: React.FC = () => {
   };
 
   const testFirebaseConnection = async () => {
-    if (!user) return;
+    if (!user || process.env.NODE_ENV !== 'development') return;
     
     try {
       console.log('Testing Firebase connection...');
@@ -1349,17 +1378,7 @@ const LogReaction: React.FC = () => {
                       
                       console.log('Submitting log with data:', logData);
                       console.log('Firebase collection path:', 'logs');
-                      
-                      // Test Firebase connection first
-                      console.log('Testing Firebase connection before submission...');
-                      const testDoc = await addDoc(collection(db, 'test'), {
-                        uid: user.uid,
-                        timestamp: new Date().toISOString(),
-                        test: true
-                      });
-                      console.log('Firebase test successful, document ID:', testDoc.id);
-                      
-                      // Now submit the actual log
+
                       const docRef = await addDoc(collection(db, 'logs'), logData);
                       console.log('Log submitted successfully with ID:', docRef.id);
                       
